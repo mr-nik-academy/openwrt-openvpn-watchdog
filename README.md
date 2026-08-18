@@ -1,34 +1,51 @@
-# openwrt-openvpn-watchdog
 # OpenVPN Watchdog for OpenWrt
 **by Mr Nik**
 
 A smart watchdog script for OpenWrt routers that monitors OpenVPN connectivity
-by pinging Iranian and foreign sites, and automatically restarts OpenVPN
-(and WAN if needed) when connectivity is lost.
+by pinging Iranian and foreign sites, and automatically restarts OpenVPN.
+If OpenVPN restarts 3 times within 10 minutes, a full recovery sequence is triggered.
 
 ---
 
 ## Features
 - Monitors OpenVPN service status
-- Pings 3 Iranian sites (digikala.com, varzesh3.com, mci.ir)
-- Pings 3 foreign sites (youtube.com, instagram.com, x.com)
+- Pings 3 Iranian sites: digikala.com, varzesh3.com, mci.ir
+- Pings 3 foreign sites: youtube.com, instagram.com, x.com
 - Smart state-based logging (only logs when status changes)
 - Restarts OpenVPN automatically when connectivity fails
-- After every 3 OpenVPN restarts, also restarts WAN interface
-- Runs as a service and starts automatically on boot
+- If 3 restarts happen within 10 minutes → full recovery sequence:
+  1. Stop OpenVPN
+  2. Restart WAN interface
+  3. Wait 10 seconds
+  4. Start OpenVPN
+  5. Restart Passwall2 after 2 seconds
+  6. Reset counter and resume normal monitoring
 
 ---
 
 ## How It Works
-Every 30 seconds the script checks:
 
-1. **Is OpenVPN running?** If not, watchdog goes idle
-2. **Iranian sites check:** pings digikala → varzesh3 → mci.ir
-   - If all 3 fail → restart OpenVPN
-3. **Foreign sites check:** (only if Iranian sites are OK)
-   - pings youtube → instagram → x.com
-   - If all 3 fail → restart OpenVPN
-4. **After 3 restarts:** WAN interface is also restarted
+Every 30 seconds the script runs one cycle:
+
+**Step 1 — Check OpenVPN status:**
+- If OpenVPN just started → log `running, watchdog active`
+- If OpenVPN just stopped → log `stopped, watchdog inactive`
+- No change → no log
+
+**Step 2 — Iranian sites check:**
+- ping digikala.com → if failed, wait 5s
+- ping varzesh3.com → if failed, wait 5s
+- ping mci.ir → if failed → trigger restart
+
+**Step 3 — Foreign sites check (only if Iranian sites are OK):**
+- ping youtube.com → if failed, wait 5s
+- ping instagram.com → if failed, wait 5s
+- ping x.com → if failed → trigger restart
+
+**Step 4 — Restart logic:**
+- Each restart increments a counter
+- If more than 10 minutes have passed since first restart → counter resets
+- If counter reaches 3 within 10 minutes → full recovery sequence runs
 
 ---
 
@@ -45,13 +62,15 @@ cat > /etc/mrnik-openvpn-watchdog.sh << 'EOF'
 #              by pinging Iranian and foreign
 #              sites and restarts OpenVPN
 #              if all pings fail.
-#              Every 3 restarts, WAN is also
-#              restarted.
+#              If 3 restarts happen within 10
+#              minutes, WAN is restarted and
+#              OpenVPN + Passwall2 are reloaded.
 # ============================================
 
 TSFILE=/tmp/mrnik-openvpn-last-restart.ts
 OVPN_STATE=/tmp/mrnik-openvpn-service-state
 RESTART_COUNT_FILE=/tmp/mrnik-openvpn-restart-count
+RESTART_WINDOW_FILE=/tmp/mrnik-openvpn-restart-window
 
 log() {
     logger -p notice -t mrnik-openvpn-watchdog "$1"
@@ -82,22 +101,46 @@ restart_openvpn() {
     NOW=$(date +%s)
     LAST=$(cat "$TSFILE" 2>/dev/null || echo 0)
     DIFF=$((NOW - LAST))
+
     if [ "$DIFF" -gt 60 ]; then
         echo "$NOW" > "$TSFILE"
+
+        WINDOW_START=$(cat "$RESTART_WINDOW_FILE" 2>/dev/null || echo 0)
+        WINDOW_DIFF=$((NOW - WINDOW_START))
+        if [ "$WINDOW_DIFF" -gt 600 ]; then
+            echo "0" > "$RESTART_COUNT_FILE"
+            echo "$NOW" > "$RESTART_WINDOW_FILE"
+        fi
 
         COUNT=$(cat "$RESTART_COUNT_FILE" 2>/dev/null || echo 0)
         COUNT=$((COUNT + 1))
         echo "$COUNT" > "$RESTART_COUNT_FILE"
 
-        log "$REASON, restarting OpenVPN (restart #$COUNT)"
+        log "$REASON, restarting OpenVPN (restart #$COUNT in current window)"
         service openvpn restart
 
         if [ "$COUNT" -ge 3 ]; then
-            log "3 restarts reached, restarting WAN interface too"
+            log "3 restarts within 10 minutes — stopping OpenVPN, restarting WAN"
+
+            service openvpn stop
+            sleep 2
+
             ifdown wan
-            sleep 5
+            sleep 10
             ifup wan
+            sleep 10
+
+            log "Restarting OpenVPN after WAN recovery"
+            service openvpn start
+            sleep 2
+
+            log "Restarting Passwall2"
+            /etc/init.d/passwall2 restart
+
             echo "0" > "$RESTART_COUNT_FILE"
+            echo "$(date +%s)" > "$RESTART_WINDOW_FILE"
+
+            log "Recovery complete, resuming watchdog cycle"
         fi
     fi
 }
@@ -183,6 +226,13 @@ logread | grep mrnik-openvpn-watchdog | tail -5
 
 ---
 
+## Check Logs
+```bash
+logread | grep mrnik-openvpn-watchdog | tail -10
+```
+
+---
+
 ## Removal
 ```bash
 /etc/init.d/mrnik-openvpn-watchdog stop
@@ -193,14 +243,8 @@ rm -f /tmp/mrnik-openvpn-watchdog.pid
 rm -f /tmp/mrnik-openvpn-last-restart.ts
 rm -f /tmp/mrnik-openvpn-service-state
 rm -f /tmp/mrnik-openvpn-restart-count
+rm -f /tmp/mrnik-openvpn-restart-window
 rm -f /tmp/mrnik-openvpn-ping-*
-```
-
----
-
-## Check Logs
-```bash
-logread | grep mrnik-openvpn-watchdog | tail -10
 ```
 
 ---
