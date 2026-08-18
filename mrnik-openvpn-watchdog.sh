@@ -7,13 +7,15 @@ cat > /etc/mrnik-openvpn-watchdog.sh << 'EOF'
 #              by pinging Iranian and foreign
 #              sites and restarts OpenVPN
 #              if all pings fail.
-#              Every 3 restarts, WAN is also
-#              restarted.
+#              If 3 restarts happen within 10
+#              minutes, WAN is restarted and
+#              OpenVPN + Passwall2 are reloaded.
 # ============================================
 
 TSFILE=/tmp/mrnik-openvpn-last-restart.ts
 OVPN_STATE=/tmp/mrnik-openvpn-service-state
 RESTART_COUNT_FILE=/tmp/mrnik-openvpn-restart-count
+RESTART_WINDOW_FILE=/tmp/mrnik-openvpn-restart-window
 
 log() {
     logger -p notice -t mrnik-openvpn-watchdog "$1"
@@ -44,22 +46,53 @@ restart_openvpn() {
     NOW=$(date +%s)
     LAST=$(cat "$TSFILE" 2>/dev/null || echo 0)
     DIFF=$((NOW - LAST))
+
     if [ "$DIFF" -gt 60 ]; then
         echo "$NOW" > "$TSFILE"
+
+        # چک پنجره زمانی 10 دقیقه
+        WINDOW_START=$(cat "$RESTART_WINDOW_FILE" 2>/dev/null || echo 0)
+        WINDOW_DIFF=$((NOW - WINDOW_START))
+        if [ "$WINDOW_DIFF" -gt 600 ]; then
+            # بیشتر از 10 دقیقه گذشته، counter رو ریست کن
+            echo "0" > "$RESTART_COUNT_FILE"
+            echo "$NOW" > "$RESTART_WINDOW_FILE"
+        fi
 
         COUNT=$(cat "$RESTART_COUNT_FILE" 2>/dev/null || echo 0)
         COUNT=$((COUNT + 1))
         echo "$COUNT" > "$RESTART_COUNT_FILE"
 
-        log "$REASON, restarting OpenVPN (restart #$COUNT)"
+        log "$REASON, restarting OpenVPN (restart #$COUNT in current window)"
         service openvpn restart
 
         if [ "$COUNT" -ge 3 ]; then
-            log "3 restarts reached, restarting WAN interface too"
+            log "3 restarts within 10 minutes — stopping OpenVPN, restarting WAN"
+
+            # خاموش کردن OpenVPN
+            service openvpn stop
+            sleep 2
+
+            # ری استارت WAN
             ifdown wan
-            sleep 5
+            sleep 10
             ifup wan
+            sleep 10
+
+            # روشن کردن مجدد OpenVPN
+            log "Restarting OpenVPN after WAN recovery"
+            service openvpn start
+            sleep 2
+
+            # ری استارت Passwall2
+            log "Restarting Passwall2"
+            /etc/init.d/passwall2 restart
+
+            # ریست counter و پنجره زمانی
             echo "0" > "$RESTART_COUNT_FILE"
+            echo "$(date +%s)" > "$RESTART_WINDOW_FILE"
+
+            log "Recovery complete, resuming watchdog cycle"
         fi
     fi
 }
@@ -104,3 +137,6 @@ while true; do
 done
 EOF
 chmod +x /etc/mrnik-openvpn-watchdog.sh
+/etc/init.d/mrnik-openvpn-watchdog restart
+sleep 5
+logread | grep mrnik-openvpn-watchdog | tail -3
