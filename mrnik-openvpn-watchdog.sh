@@ -8,8 +8,9 @@ cat > /etc/mrnik-openvpn-watchdog.sh << 'EOF'
 #              sites and restarts OpenVPN
 #              if all pings fail.
 #              If 3 restarts happen within 10
-#              minutes, WAN is restarted and
-#              OpenVPN + Passwall2 are reloaded.
+#              minutes, a full recovery sequence
+#              is triggered including Passwall2
+#              nftset flush and reload.
 # ============================================
 
 TSFILE=/tmp/mrnik-openvpn-last-restart.ts
@@ -50,11 +51,9 @@ restart_openvpn() {
     if [ "$DIFF" -gt 60 ]; then
         echo "$NOW" > "$TSFILE"
 
-        # چک پنجره زمانی 10 دقیقه
         WINDOW_START=$(cat "$RESTART_WINDOW_FILE" 2>/dev/null || echo 0)
         WINDOW_DIFF=$((NOW - WINDOW_START))
         if [ "$WINDOW_DIFF" -gt 600 ]; then
-            # بیشتر از 10 دقیقه گذشته، counter رو ریست کن
             echo "0" > "$RESTART_COUNT_FILE"
             echo "$NOW" > "$RESTART_WINDOW_FILE"
         fi
@@ -67,26 +66,23 @@ restart_openvpn() {
         service openvpn restart
 
         if [ "$COUNT" -ge 3 ]; then
-            log "3 restarts within 10 minutes — stopping OpenVPN, restarting WAN"
+            log "3 restarts within 10 minutes — starting full recovery sequence"
 
             # خاموش کردن OpenVPN
+            log "Stopping OpenVPN"
             service openvpn stop
             sleep 2
 
-            # ری استارت WAN
-            ifdown wan
-            sleep 10
-            ifup wan
+            # Clear nftset و ری استارت Passwall2
+            log "Flushing Passwall2 nftset and restarting"
+            uci set passwall2.@global[0].flush_set=1
+            uci commit passwall2
+            /etc/init.d/passwall2 restart
             sleep 10
 
             # روشن کردن مجدد OpenVPN
-            log "Restarting OpenVPN after WAN recovery"
+            log "Restarting OpenVPN after recovery"
             service openvpn start
-            sleep 2
-
-            # ری استارت Passwall2
-            log "Restarting Passwall2"
-            /etc/init.d/passwall2 restart
 
             # ریست counter و پنجره زمانی
             echo "0" > "$RESTART_COUNT_FILE"
@@ -136,7 +132,32 @@ while true; do
     sleep 30
 done
 EOF
+chmod +x /etc/mrnik-openvpn-watchdog.sh                sleep 5
+                if ! check_ping "mci.ir" "mci"; then
+                    restart_openvpn "all 3 iranian pings failed"
+                fi
+            fi
+        else
+            if ! check_ping "youtube.com" "youtube"; then
+                sleep 5
+                if ! check_ping "instagram.com" "instagram"; then
+                    sleep 5
+                    if ! check_ping "x.com" "xcom"; then
+                        restart_openvpn "all 3 foreign pings failed"
+                    fi
+                fi
+            fi
+        fi
+
+    else
+        PREV_OVPN=$(cat "$OVPN_STATE" 2>/dev/null || echo "unknown")
+        if [ "$PREV_OVPN" != "stopped" ]; then
+            log "OpenVPN service is stopped, watchdog inactive"
+            echo "stopped" > "$OVPN_STATE"
+        fi
+    fi
+
+    sleep 30
+done
+EOF
 chmod +x /etc/mrnik-openvpn-watchdog.sh
-/etc/init.d/mrnik-openvpn-watchdog restart
-sleep 5
-logread | grep mrnik-openvpn-watchdog | tail -3
