@@ -19,5 +19,3 @@ stop() {
 }
 EOF
 chmod +x /etc/init.d/mrnik-openvpn-watchdog
-/etc/init.d/mrnik-openvpn-watchdog enable
-/etc/init.d/mrnik-openvpn-watchdog start
