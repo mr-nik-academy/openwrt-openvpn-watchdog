@@ -4,6 +4,7 @@
 A smart watchdog script for OpenWrt routers that monitors OpenVPN connectivity
 by pinging Iranian and foreign sites, and automatically restarts OpenVPN.
 If OpenVPN restarts 3 times within 10 minutes, a full recovery sequence is triggered.
+Works whether you're running **Passwall2** or **PBR** alongside OpenVPN.
 
 ---
 
@@ -13,18 +14,22 @@ If OpenVPN restarts 3 times within 10 minutes, a full recovery sequence is trigg
 - Pings 3 foreign sites: `youtube.com`, `instagram.com`, `x.com`
 - Smart state-based logging (only logs when status changes)
 - Restarts OpenVPN automatically when connectivity fails
+- Detects whether Passwall2 is actually running (via its xray/sing-box process)
 - **Full recovery sequence** if 3 restarts happen within 10 minutes:
   1. Stop OpenVPN
-  2. Flush Passwall2 nftset and restart Passwall2
-  3. Wait 10 seconds
-  4. Start OpenVPN
-  5. Reset counter and resume normal monitoring
+  2. Flag Passwall2's nftset for flush (if Passwall2 is active)
+  3. Start OpenVPN
+  4. Wait for `tun0` to come up (up to 20s)
+  5. Restart Passwall2 to rebuild its nftables rules
+  6. Reset counter and resume normal monitoring
+
+> **Note:** PBR needs no restart step here — it restarts automatically whenever the OpenVPN service itself restarts.
 
 ---
 
 ## How It Works
 
-Every 30 seconds the script runs one cycle:
+Every 60 seconds the script runs one cycle:
 
 **1 — OpenVPN status check:**
 - Just started → log `running, watchdog active`
@@ -43,20 +48,25 @@ Every 30 seconds the script runs one cycle:
 
 **4 — Restart logic:**
 - Each restart increments a counter
-- Counter resets if more than 10 minutes passed since first restart
+- Counter resets if more than 10 minutes passed since the first restart
 - If counter reaches 3 within 10 minutes → full recovery sequence:
 
 ```
 Stop OpenVPN
   ↓
-Flush Passwall2 nftset + Restart Passwall2
-  ↓
-Wait 10 seconds
+Passwall2 active? → Flag nftset for flush
   ↓
 Start OpenVPN
   ↓
+Wait for tun0 to come up (up to 20s)
+  ↓
+Passwall2 active? → Restart Passwall2 (rebuilds tun0-dependent rules)
+Not active (PBR mode)? → Skip — PBR already restarted itself
+  ↓
 Reset counter → Resume monitoring
 ```
+
+**Why OpenVPN starts *before* Passwall2 restarts:** Passwall2's nftables ruleset references `tun0` by name. Restarting it while `tun0` doesn't exist yet throws `Interface does not exist` errors and leaves rules broken. Bringing OpenVPN up first and confirming `tun0` is present avoids this entirely.
 
 ---
 
@@ -123,8 +133,14 @@ rm -f /tmp/mrnik-openvpn-ping-*
 
 ## Requirements
 - OpenWrt 23.xx or later
-- OpenVPN installed and configured
-- Passwall2 installed
+- OpenVPN installed and configured (`tun0` tunnel interface)
+- Passwall2 (optional) or PBR (optional)
+
+---
+
+## Known Limitations / Roadmap
+- Only OpenVPN is supported for now — Cisco OpenConnect support (auto-detecting which VPN protocol is active) is planned.
+- Passwall2's process paths (`/tmp/etc/passwall2/bin/...`) are based on a tested setup; adjust in the script if yours differs.
 
 ---
 
