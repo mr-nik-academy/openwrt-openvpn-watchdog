@@ -146,11 +146,11 @@ while true; do
             echo "running" > "$OVPN_STATE"
         fi
 
-        if ! check_ping "digikala.com" "digikala"; then
+        if ! check_ping "mci.ir" "mci"; then
             sleep 5
-            if ! check_ping "varzesh3.com" "varzesh3"; then
+            if ! check_ping "digikala.com" "digikala"; then
                 sleep 5
-                if ! check_ping "mci.ir" "mci"; then
+                if ! check_ping "varzesh3.com" "varzesh3"; then
                     restart_openvpn "all 3 iranian pings failed"
                 fi
             fi
