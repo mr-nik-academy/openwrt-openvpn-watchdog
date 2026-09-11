@@ -260,20 +260,32 @@ chmod +x /etc/mrnik-openvpn-watchdog.sh
 ### Step 2 — Create the init.d service
 
 ```bash
-cat > /etc/init.d/mrnik-openvpn-watchdog << 'SCRIPT'
-[paste init.d content here]
-SCRIPT
+cat > /etc/init.d/mrnik-openvpn-watchdog << 'EOF'
+#!/bin/sh /etc/rc.common
+# OpenVPN Watchdog - by Mr Nik
+START=99
+STOP=10
+start() {
+    if [ -f /tmp/mrnik-openvpn-watchdog.pid ]; then
+        kill $(cat /tmp/mrnik-openvpn-watchdog.pid) 2>/dev/null
+    fi
+    /etc/mrnik-openvpn-watchdog.sh &
+    echo $! > /tmp/mrnik-openvpn-watchdog.pid
+    logger -p notice -t mrnik-openvpn-watchdog "service started, PID $!"
+}
+stop() {
+    if [ -f /tmp/mrnik-openvpn-watchdog.pid ]; then
+        kill $(cat /tmp/mrnik-openvpn-watchdog.pid) 2>/dev/null
+        rm -f /tmp/mrnik-openvpn-watchdog.pid
+    fi
+}
+EOF
 chmod +x /etc/init.d/mrnik-openvpn-watchdog
-```
-
-### Step 3 — Enable and start
-
-```bash
 /etc/init.d/mrnik-openvpn-watchdog enable
 /etc/init.d/mrnik-openvpn-watchdog start
 ```
 
-### Step 4 — Verify
+### Step 3 — Verify
 
 ```bash
 ps | grep mrnik-openvpn-watchdog | grep -v grep
