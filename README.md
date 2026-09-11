@@ -10,7 +10,7 @@ Works whether you're running **Passwall2** or **PBR** alongside OpenVPN.
 
 ## Features
 - Monitors OpenVPN service status
-- Pings 3 Iranian sites: `digikala.com`, `varzesh3.com`, `mci.ir`
+- Pings 3 Iranian sites: `mci.ir`, `digikala.com`, `varzesh3.com`
 - Pings 3 foreign sites: `youtube.com`, `instagram.com`, `x.com`
 - Smart state-based logging (only logs when status changes)
 - Restarts OpenVPN automatically when connectivity fails
@@ -37,9 +37,9 @@ Every 60 seconds the script runs one cycle:
 - No change → no log
 
 **2 — Iranian sites check:**
+- ping `mci.ir` → failed → wait 5s
 - ping `digikala.com` → failed → wait 5s
-- ping `varzesh3.com` → failed → wait 5s
-- ping `mci.ir` → failed → trigger restart
+- ping `varzesh3.com` → failed → trigger restart
 
 **3 — Foreign sites check** *(only if Iranian sites are OK)*
 - ping `youtube.com` → failed → wait 5s
@@ -223,11 +223,11 @@ while true; do
             echo "running" > "$OVPN_STATE"
         fi
 
-        if ! check_ping "digikala.com" "digikala"; then
+        if ! check_ping "mci.ir" "mci"; then
             sleep 5
-            if ! check_ping "varzesh3.com" "varzesh3"; then
+            if ! check_ping "digikala.com" "digikala"; then
                 sleep 5
-                if ! check_ping "mci.ir" "mci"; then
+                if ! check_ping "varzesh3.com" "varzesh3"; then
                     restart_openvpn "all 3 iranian pings failed"
                 fi
             fi
