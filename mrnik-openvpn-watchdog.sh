@@ -9,8 +9,15 @@ cat > /etc/mrnik-openvpn-watchdog.sh << 'EOF'
 #              if all pings fail.
 #              If 3 restarts happen within 10
 #              minutes, a full recovery sequence
-#              is triggered including Passwall2
-#              nftset flush and reload.
+#              is triggered. OpenVPN is brought
+#              back up FIRST (so tun0 exists),
+#              then if passwall2 is active its
+#              nftset is flushed and it's
+#              restarted (rebuilding rules that
+#              reference tun0). PBR is NOT
+#              restarted here since it restarts
+#              automatically whenever the OpenVPN
+#              service itself restarts.
 # ============================================
 
 TSFILE=/tmp/mrnik-openvpn-last-restart.ts
@@ -42,6 +49,15 @@ check_ping() {
     fi
 }
 
+# Detect whether passwall2 is active (based on its real core process: xray or sing-box)
+is_passwall2_active() {
+    if pgrep -f "/tmp/etc/passwall2/bin/xray" > /dev/null 2>&1 || \
+       pgrep -f "/tmp/etc/passwall2/bin/sing-box" > /dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
 restart_openvpn() {
     local REASON=$1
     NOW=$(date +%s)
@@ -68,23 +84,52 @@ restart_openvpn() {
         if [ "$COUNT" -ge 3 ]; then
             log "3 restarts within 10 minutes — starting full recovery sequence"
 
-            # خاموش کردن OpenVPN
+            PW2_WAS_ACTIVE=0
+            if is_passwall2_active; then
+                PW2_WAS_ACTIVE=1
+            fi
+
+            # Stop OpenVPN
             log "Stopping OpenVPN"
             service openvpn stop
             sleep 2
 
-            # Clear nftset و ری استارت Passwall2
-            log "Flushing Passwall2 nftset and restarting"
-            uci set passwall2.@global[0].flush_set=1
-            uci commit passwall2
-            /etc/init.d/passwall2 restart
-            sleep 10
+            if [ "$PW2_WAS_ACTIVE" -eq 1 ]; then
+                # Flag the nftset for flush now; this doesn't need tun0 to exist
+                log "passwall2 active — flagging nftset for flush"
+                uci set passwall2.@global[0].flush_set=1
+                uci commit passwall2
+            fi
 
-            # روشن کردن مجدد OpenVPN
+            # Bring OpenVPN back up
             log "Restarting OpenVPN after recovery"
             service openvpn start
 
-            # ریست counter و پنجره زمانی
+            if [ "$PW2_WAS_ACTIVE" -eq 1 ]; then
+                # Wait for tun0 to actually come up (up to 20s) before restarting passwall2
+                WAIT=0
+                TUN0_UP=0
+                while [ "$WAIT" -lt 20 ]; do
+                    if ip link show tun0 > /dev/null 2>&1; then
+                        TUN0_UP=1
+                        break
+                    fi
+                    sleep 1
+                    WAIT=$((WAIT + 1))
+                done
+
+                if [ "$TUN0_UP" -eq 1 ]; then
+                    log "tun0 confirmed up after ${WAIT}s — restarting passwall2 to rebuild nftables rules"
+                else
+                    log "tun0 still not up after ${WAIT}s — restarting passwall2 anyway (rules may fail and need a manual retry)"
+                fi
+                /etc/init.d/passwall2 restart
+                sleep 5
+            else
+                log "passwall2 not active (likely PBR mode) — skipping passwall2 step; PBR restarts automatically with OpenVPN"
+            fi
+
+            # Reset counter and time window
             echo "0" > "$RESTART_COUNT_FILE"
             echo "$(date +%s)" > "$RESTART_WINDOW_FILE"
 
@@ -129,35 +174,7 @@ while true; do
         fi
     fi
 
-    sleep 30
-done
-EOF
-chmod +x /etc/mrnik-openvpn-watchdog.sh                sleep 5
-                if ! check_ping "mci.ir" "mci"; then
-                    restart_openvpn "all 3 iranian pings failed"
-                fi
-            fi
-        else
-            if ! check_ping "youtube.com" "youtube"; then
-                sleep 5
-                if ! check_ping "instagram.com" "instagram"; then
-                    sleep 5
-                    if ! check_ping "x.com" "xcom"; then
-                        restart_openvpn "all 3 foreign pings failed"
-                    fi
-                fi
-            fi
-        fi
-
-    else
-        PREV_OVPN=$(cat "$OVPN_STATE" 2>/dev/null || echo "unknown")
-        if [ "$PREV_OVPN" != "stopped" ]; then
-            log "OpenVPN service is stopped, watchdog inactive"
-            echo "stopped" > "$OVPN_STATE"
-        fi
-    fi
-
-    sleep 30
+    sleep 60
 done
 EOF
 chmod +x /etc/mrnik-openvpn-watchdog.sh
