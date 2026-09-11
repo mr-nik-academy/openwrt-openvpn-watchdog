@@ -285,18 +285,10 @@ chmod +x /etc/init.d/mrnik-openvpn-watchdog
 /etc/init.d/mrnik-openvpn-watchdog start
 ```
 
-### Step 3 — Verify
-
-```bash
-ps | grep mrnik-openvpn-watchdog | grep -v grep
-logread | grep mrnik-openvpn-watchdog | tail -5
-```
-
----
-
 ## Check Logs
 
 ```bash
+pgrep -f "mrnik-openvpn-watchdog.sh"
 logread | grep mrnik-openvpn-watchdog | tail -10
 ```
 
