@@ -325,8 +325,9 @@ rm -f /tmp/mrnik-openvpn-ping-*
 ---
 
 ## YouTube Channel
-📺 Mr Nik — [Mrnik academy YouTube] (https://www.youtube.com/@MrNikAcademy)
+📺 Mr Nik — [Mrnik academy YouTube](https://www.youtube.com/@MrNikAcademy)
+
 ---
 
 ## License
-MIT License — Free to use and modify
+Use and redistribution of this code is permitted only with attribution to the original source.
